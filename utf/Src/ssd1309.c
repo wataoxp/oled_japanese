@@ -4,8 +4,9 @@
  *  Created on: Mar 1, 2025
  *      Author: wataoxp
  */
-#include "ssd1309.h"
 #include "main.h"
+#include "ssd1309.h"
+#include "utf_code.h"
 
 #define CS_AUTO_CONTROL
 
@@ -18,10 +19,13 @@ static Font_Typedef *FontData;
 static uint8_t Xpoint = 0;
 static uint8_t Ypoint = 0;
 
+const UTFtoEUC *Table;
+
 static void OLED_GPIO_Config(GPIO_TypeDef *GPIOx,uint32_t Pos);
 static void UpdatePointDisplay(uint8_t colBase,uint8_t colSize,uint8_t pageBase);
 static void SendUpdatePoint(uint8_t x1,uint8_t x2,uint8_t y1,uint8_t y2);
-static uint8_t EUC_GetCharacter(unsigned char *str,uint16_t *moji);
+static uint8_t GetCharacter(unsigned char *str,uint32_t *moji);
+static uint16_t ConvUTF(uint32_t Kanji);
 
 static inline void SelectCommand(void)
 {
@@ -75,6 +79,7 @@ void OLEDinit(uint8_t Contrast)
 	OLED_SPI_Transmit(init, sizeof(init));
 
 	FontData = GetHandle();
+	Table = GetKanjiStruct();
 }
 static void OLED_GPIO_Config(GPIO_TypeDef *GPIOx,uint32_t Pos)
 {
@@ -104,43 +109,53 @@ void ClearLCD(uint32_t inverse)
 
 	UpdateFillDisplay();
 }
-static inline bool EUC_IsByteSize(unsigned char c)
+static inline bool IsByteSize(unsigned char c)
 {
-    return (c >= EUC_AREA_4 && c < EUC_AREA_ERROR);
+    return (c >= UTF_AREA_4_5);
 }
-static uint8_t EUC_GetCharacter(unsigned char *str,uint16_t *moji)
+static uint8_t GetCharacter(unsigned char *str,uint32_t *moji)
 {
 	uint8_t MojiSize = 0;
+	uint32_t MultiByte = 0;
 
-	if(EUC_IsByteSize(str[0]))
+	if(IsByteSize(str[0]))
 	{
-		MojiSize = 2;
-		*moji = (uint16_t)(str[0] << 8 | str[1]);
+		MojiSize = 3;
+		MultiByte = (uint32_t)(str[0] << 16 | str[1] << 8 | str[2]);
 
-		switch(str[0])
+
+		if(MultiByte <= UTF_KANA_END)
 		{
-		case EUC_AREA_4:
 			FontData->index = Kana;
 			FontData->OffSet = KANA_OFFSET;
-			break;
-		case EUC_AREA_5:
+			*moji = (MultiByte <= 0xE381BF)? (uint16_t)MultiByte - UTF_KANA_OFFSET:(uint16_t)MultiByte - (UTF_KANA_OFFSET + 0xC0);
+		}
+		else if(MultiByte <= UTF_KATAKANA_END)
+		{
 			FontData->index = Katakana;
 			FontData->OffSet= KATAKANA_OFFSET;
-			break;
-		default:
-			FontData->index = Kanji;
-			FontData->OffSet = KANJI_OFFSET + (str[0] - EUC_AREA_16_START) * EUC_AREA_16_SPACE;
-			break;
+			*moji = (MultiByte <= 0xE382BF)? (uint16_t)MultiByte - UTF_KATAKANA_OFFSET:(uint16_t)MultiByte - (UTF_KATAKANA_OFFSET + 0xC0);
+		}
+		else
+		{
+			*moji = ConvUTF(MultiByte);
+			if(*moji != 0)					//0ã¯ã‚¨ãƒ©ãƒ¼
+			{
+				FontData->index = Kanji;
+				//UTFã‹ã‚‰å¤‰æ›ã™ã‚‹å ´åˆã€EUCã‚³ãƒ¼ãƒ‰ã¯strã§ã¯ãªã*mojiã«å…¥ã£ã¦ã„ã‚‹ç‚ºå°‘ã—å¼ãŒå¤‰ã‚ã‚‹
+//				FontData->OffSet = KANJI_OFFSET + (str[0] - EUC_AREA_16_START) * EUC_AREA_16_SPACE;
+				FontData->OffSet = KANJI_OFFSET + ((*moji >> 8) - EUC_AREA_16_START) * EUC_AREA_16_SPACE;
+			}
 		}
 	}
 	else
 	{
-		if(str[0] < EUC_ASCII_MAX)		//AsciiÊ¸»ú
+		if(str[0] < EUC_ASCII_MAX)		//Asciiæ–‡å­—
 		{
 			MojiSize = 1;
 			*moji = str[0];
 		}
-		else							//JISÂè°ì¿å½à¤ËÌµ¤¤Ê¸»ú¡¢¥¨¥é¡¼
+		else							//JISç¬¬ä¸€æ°´æº–ã«ç„¡ã„æ–‡å­—ã€ã‚¨ãƒ©ãƒ¼
 		{
 			MojiSize = 2;
 			*moji = EUC_ASCII_MAX;
@@ -150,42 +165,42 @@ static uint8_t EUC_GetCharacter(unsigned char *str,uint16_t *moji)
 	}
 	return MojiSize;
 }
-void WriteChar(uint16_t Asci)
+void WriteChar(uint32_t Asci)
 {
 	uint8_t Page = DIV8(Ypoint);
 	uint16_t moji = Asci - FontData->OffSet;
 	JisFont Text = GetFontData(FontData->index);
 
 	FLASH->ACR |= FLASH_ACR_PRFTEN;
-	if(Page == 1 || Page == 4)										//2¹ÔÌÜ¤È4¹ÔÌÜ
+	if(Page == 1 || Page == 4)										//2è¡Œç›®ã¨4è¡Œç›®
 	{
 		for(uint8_t i = 0; i < 12;i++)
 		{
-			OLED_Buffer[Page][Xpoint+i] |= Text[moji][i] << 4;		//LSB¤¬É½¼¨¾å¤Î¾åÂ¦¤Ë¤Ê¤ë¤Î¤Ç¾å°ÌÂ¦¤Ë¥·¥Õ¥È¤¹¤ë
+			OLED_Buffer[Page][Xpoint+i] |= Text[moji][i] << 4;		//LSBãŒè¡¨ç¤ºä¸Šã®ä¸Šå´ã«ãªã‚‹ã®ã§ä¸Šä½å´ã«ã‚·ãƒ•ãƒˆã™ã‚‹
 			OLED_Buffer[Page+1][Xpoint+i] |= Text[moji][i+12] << 4 | ((Text[moji][i] & 0xF0) >> 4);
 		}
 	}
 	else
 	{
-		memcpy(&OLED_Buffer[Page][Xpoint],Text[moji],12);			//1Ê¸»ú¤Î¾åÂ¦8¥É¥Ã¥È¤òÉÁ²è(24¥Ğ¥¤¥È¤ÎÁ°È¾)
-		memcpy(&OLED_Buffer[Page+1][Xpoint],Text[moji]+12,12);		//£±Ê¸»ú¤Î²¼Â¦4¥É¥Ã¥È¤òÉÁ²è(24¥Ğ¥¤¥È¤Î¸åÈ¾)
+		memcpy(&OLED_Buffer[Page][Xpoint],Text[moji],12);			//1æ–‡å­—ã®ä¸Šå´8ãƒ‰ãƒƒãƒˆã‚’æç”»(24ãƒã‚¤ãƒˆã®å‰åŠ)
+		memcpy(&OLED_Buffer[Page+1][Xpoint],Text[moji]+12,12);		//ï¼‘æ–‡å­—ã®ä¸‹å´4ãƒ‰ãƒƒãƒˆã‚’æç”»(24ãƒã‚¤ãƒˆã®å¾ŒåŠ)
 	}
 	FLASH->ACR &= ~FLASH_ACR_PRFTEN;
 	Xpoint += FontData->Width;
 }
 void WriteString(char *str,uint8_t size)
 {
-	uint8_t colBase = Xpoint;			//ÉÁ²èÁ°¤ÎºÂÉ¸¤òµ­²±
+	uint8_t colBase = Xpoint;			//æç”»å‰ã®åº§æ¨™ã‚’è¨˜æ†¶
 	uint8_t PageBase = DIV8(Ypoint);
 	uint8_t Byte = 0;
-	uint16_t moji;
+	uint32_t moji;
 
 	while(Byte < size)
 	{
-		Byte += EUC_GetCharacter((uint8_t*)&str[Byte], &moji);
+		Byte += GetCharacter((uint8_t*)&str[Byte], &moji);
 		WriteChar(moji);
 	}
-	SendUpdatePoint(colBase, Xpoint-1, PageBase, PageBase+1);		//n¥«¥é¥à¤Ş¤Ç½ñ¤¯¾ì¹ç(n-1)¥«¥é¥à¤ò»ØÄê¤¹¤ë
+	SendUpdatePoint(colBase, Xpoint-1, PageBase, PageBase+1);		//nã‚«ãƒ©ãƒ ã¾ã§æ›¸ãå ´åˆ(n-1)ã‚«ãƒ©ãƒ ã‚’æŒ‡å®šã™ã‚‹
 
 	UpdatePointDisplay(colBase, Xpoint-colBase, PageBase);
 
@@ -198,7 +213,7 @@ static void SendUpdatePoint(uint8_t x1,uint8_t x2,uint8_t y1,uint8_t y2)
 	SelectCommand();
 	OLED_SPI_Transmit(cusor, sizeof(cusor));
 }
-//¥Ô¥¯¥»¥ëÃ±°Ì¤Ç¤Ï¤Ê¤¯¡¢Ê¸»ú¤ª¤è¤Ó¹Ô¤ò»ØÄê¤¹¤ë
+//ãƒ”ã‚¯ã‚»ãƒ«å˜ä½ã§ã¯ãªãã€æ–‡å­—ãŠã‚ˆã³è¡Œã‚’æŒ‡å®šã™ã‚‹
 void SetCusor(uint8_t x,uint8_t y)
 {
 	if(x > OLED_MAX_COLUMN) x = 0;
@@ -208,11 +223,11 @@ void SetCusor(uint8_t x,uint8_t y)
 	Ypoint = y * FontData->Height;
 }
 /***
-	col&pageBase:X¤ª¤è¤ÓYºÂÉ¸¤ÎÉÁ²è³«»ÏÅÀ¡£
-	col¤Ï¥Ğ¥Ã¥Õ¥¡¤Î³«»ÏÅÀ¡£page¤Ï²¿ÈÖÌÜ¤ÎÇÛÎó¤«¤ò»ØÄê¤·¤Æ¤¤¤ë¡£
+	col&pageBase:XãŠã‚ˆã³Yåº§æ¨™ã®æç”»é–‹å§‹ç‚¹ã€‚
+	colã¯ãƒãƒƒãƒ•ã‚¡ã®é–‹å§‹ç‚¹ã€‚pageã¯ä½•ç•ªç›®ã®é…åˆ—ã‹ã‚’æŒ‡å®šã—ã¦ã„ã‚‹ã€‚
 
-	colSize:Í­¸ú¥Ç¡¼¥¿¿ô¡£Base¤ÈÂ­¤¹¤ÈÉÁ²è´°Î»ÅÀ¡£
-	pageEnd:¥Õ¥©¥ó¥È¤òÊÑ¤¨¤Ê¤¤¸Â¤ê¤ÏÉ¬¤ºpageBase+1
+	colSize:æœ‰åŠ¹ãƒ‡ãƒ¼ã‚¿æ•°ã€‚Baseã¨è¶³ã™ã¨æç”»å®Œäº†ç‚¹ã€‚
+	pageEnd:ãƒ•ã‚©ãƒ³ãƒˆã‚’å¤‰ãˆãªã„é™ã‚Šã¯å¿…ãšpageBase+1
 ***/
 static void UpdatePointDisplay(uint8_t colBase,uint8_t colSize,uint8_t pageBase)
 {
@@ -227,24 +242,17 @@ void UpdateFillDisplay(void)
 	OLED_SPI_Transmit((uint8_t*)OLED_Buffer, sizeof(OLED_Buffer));
 }
 
-/********* ex.²ş¹Ô¥³¡¼¥É¤òÇ§¼±¡¢¿­¤Ğ¤·ËÀ¤ò¥Ï¥¤¥Õ¥ó¤ËÊÑ´¹ *******/
+/********* ex.æ”¹è¡Œã‚³ãƒ¼ãƒ‰ã‚’èªè­˜ã€ä¼¸ã°ã—æ£’ã‚’ãƒã‚¤ãƒ•ãƒ³ã«å¤‰æ› *******/
 void StringLCD(char *str,uint8_t size)
 {
 	uint8_t Byte = 0;
-	uint16_t moji;
+	uint32_t moji;
 
 	SetCusor(0, 0);
 
 	while(Byte < size)
 	{
-		if((str[Byte] << 8 | str[Byte+1]) == 0xA1BC)
-		{
-			FontData->index = Ascii;
-			FontData->OffSet = ASCII_OFFSET;
-			WriteChar('-');
-			Byte += 2;
-		}
-		else if(str[Byte] == '\n')
+		if(str[Byte] == '\n')
 		{
 			Xpoint = 0;
 			Ypoint += 12;
@@ -252,9 +260,29 @@ void StringLCD(char *str,uint8_t size)
 		}
 		else
 		{
-			Byte += EUC_GetCharacter((uint8_t*)&str[Byte], &moji);
+			Byte += GetCharacter((uint8_t*)&str[Byte], &moji);
 			WriteChar(moji);
 		}
 	}
 	UpdateFillDisplay();
+}
+
+/******* ex.æ¼¢å­—ã®UTFã‚³ãƒ¼ãƒ‰ã‚’EUC(JIS)ã«å¤‰æ› ******/
+static uint16_t ConvUTF(uint32_t Kanji)
+{
+    uint16_t Seach = 0;
+
+    while(Seach < UTF_MAX_SIZE)
+    {
+        if(Kanji == Table[Seach].utf)
+        {
+            break;
+        }
+        else
+        {
+            Seach++;
+        }
+    }
+
+    return (Seach != UTF_MAX_SIZE)? Table[Seach].euc:0;
 }
