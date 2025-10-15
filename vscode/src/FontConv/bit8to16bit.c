@@ -12,24 +12,22 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "kana.h"
-#include "katakana.h"
-#include "sinonome_asci.h"
-#include "kanji.h"
-
-const uint8_t FontSize = 12 * 2;
-const uint16_t ArrayPoint = 83;           //変換元の要素数
-uint8_t (*pArray)[24] = kana12X12;
+// #include "kana.h"
+// #include "katakana.h"
+//#include "sinonome_asci.h"
+#include "kigou24.h"
+//#include "kanji.h"
+uint8_t (*pArray)[24] = jis;
 
 
 int main(void)
 {
-    uint32_t ArraySize = ArrayPoint * FontSize;     //全体のバイト数
-    uint32_t OneArray = FontSize;                   //一次元配列１つ分のサイズ
+    uint32_t ArrayPoint = sizeof(jis) / 24;         //要素数を計算
+    uint32_t OneArray = 12*2;                   //一次元配列１つ分のサイズ
+     uint32_t ArraySize = sizeof(jis);     //全体のバイト数
 
-    printf("kana12 = %d\n",ArraySize);
-    printf("oneArray = %d\n",OneArray);
-    printf("ArrayPoint = %d\n",ArrayPoint);
+    printf("要素数 = %d\n",ArrayPoint);
+    printf("変換前の要素数 = %d\n",ArraySize);
 
     uint16_t *Binary;
     uint16_t size = sizeof(uint16_t) * OneArray/2;  //二次元配列の1要素分のみ確保
@@ -63,6 +61,8 @@ int main(void)
     }
     
     free(Binary);
+
+    printf("変換終了\n");
 
     return 0;
 }
