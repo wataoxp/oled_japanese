@@ -18,7 +18,7 @@ std::string OutputFileWrite(const std::string& filename,const std::string& After
 /*** ファイル内テキストの整数化 ***/
 std::vector<uint16_t> StringtoHex(const std::string& file);
 /*** SSD130x用フォントに編集 ***/
-std::string FontReverse(const std::vector<uint16_t>& data);
+std::string FontReverse(const std::vector<uint16_t>& data,const std::string& name);
 /*** 反転した数値を文字列に格納 ***/
 inline void ArraytoString(const std::vector<uint8_t>& pixel,std::stringstream& ss,uint32_t columnBase);
 
@@ -26,15 +26,16 @@ inline void ArraytoString(const std::vector<uint8_t>& pixel,std::stringstream& s
 constexpr uint32_t FontHeight = 12;
 constexpr uint32_t FontWidth = 12;
 
-constexpr uint32_t DisplayWidth = 64;
-
 int main(void) 
 {
     std::string before,after;
     std::string InputFile = "shinonome_area_1.h";
     std::string tmpOutputFile = "tmp12bit.h";
+  
+    std::string Arrayname = "kigou";
 
-    std::string OutputFile = "kigou.h";
+    std::string OutputFile;
+    OutputFile = ""+Arrayname+".h";
 
     before = InputFileOpen(InputFile);
 
@@ -55,7 +56,7 @@ int main(void)
     std::cout << "一時ファイル出力:" << tmpOutputFile << std::endl;
 
     std::vector<uint16_t> data = StringtoHex(after);
-    after = FontReverse(data);
+    after = FontReverse(data,Arrayname);
 
     if(OutputFileWrite(OutputFile,after) == "Error")
     {
@@ -74,7 +75,6 @@ std::string EditFileString(const std::string& before)
     std::regex pattern;         //置換対象の正規表現を記述
     std::string replacement;    //置換する文字列
     std::string After;          //置換後の文字列                   
-    std::string Text;           //追加したい文字列
 
     pattern = R"(unsigned char .+\[\] = |,0x)";         //R”()”は正規表現用リテラル
     replacement = "";
@@ -192,7 +192,7 @@ std::vector<uint16_t> StringtoHex(const std::string& file)
  * *1バイト配列pixelの場合
  *  行はHeight、列はWidth
  */
-std::string FontReverse(const std::vector<uint16_t>& data)
+std::string FontReverse(const std::vector<uint16_t>& data,const std::string& name)
 {
     uint32_t size = data.size();
     uint32_t allchar = size / FontWidth;        // size/幅(1文字分の要素数)が文字数
@@ -203,7 +203,7 @@ std::string FontReverse(const std::vector<uint16_t>& data)
 
     std::string count = std::to_string(allchar);
 
-    ss << "unsigned char kigou["+count+"][24] = {\n";
+    ss << "unsigned char "+name+"["+count+"][24] = {\n";
 
     for (uint32_t moji = 0; moji < allchar; moji++)
     {
